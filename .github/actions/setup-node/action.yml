@@ -1,0 +1,22 @@
+name: Node setup
+description: Setup Node.js with Yarn
+
+inputs:
+  node-version:
+    required: true
+  install-deps:
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v6
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: yarn
+        cache-dependency-path: yarn.lock
+
+    - name: Install dependencies
+      if: inputs.install-deps == 'true'
+      shell: bash
+      run: yarn install --immutable
