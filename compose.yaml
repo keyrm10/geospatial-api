@@ -3,11 +3,22 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: geospatial-api:local
-    container_name: geospatial-api
+    container_name: api
     env_file: .env
     environment:
       NODE_ENV: development
     ports:
       - '3000:3000'
+    restart: unless-stopped
+
+  cache:
+    build:
+      context: ./services/cache
+    container_name: cache
+    environment:
+      UPSTREAM_URL: http://api:3000
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
     restart: unless-stopped
