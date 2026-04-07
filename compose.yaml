@@ -1,24 +1,23 @@
 services:
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
     container_name: api
-    env_file: .env
-    environment:
-      NODE_ENV: development
+    build:
+      context: ./services/api
     ports:
       - '3000:3000'
+    env_file: ./services/api/.env
+    environment:
+      NODE_ENV: development
     restart: unless-stopped
 
   cache:
+    container_name: cache
     build:
       context: ./services/cache
-    container_name: cache
-    environment:
-      UPSTREAM_URL: http://api:3000
     ports:
       - "8080:80"
+    environment:
+      UPSTREAM_URL: http://api:3000
     depends_on:
       - api
     restart: unless-stopped

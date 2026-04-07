@@ -1,6 +1,9 @@
-.PHONY: build up down logs shell clean lint test test-watch restart
+API_DIR := services/api
+COMPOSE_FILE := compose.yaml
+COMPOSE := docker compose -f $(COMPOSE_FILE)
+SERVICE := api
 
-COMPOSE=docker compose -f compose.yaml
+.PHONY: build up down logs shell clean lint test test-watch restart
 
 build:
 	$(COMPOSE) build
@@ -14,20 +17,21 @@ down:
 logs:
 	$(COMPOSE) logs --follow
 
-shell:
-	$(COMPOSE) exec api sh
+restart:
+	$(COMPOSE) restart $(SERVICE)
 
-clean:
-	rm -rf dist node_modules && yarn cache clean
+shell:
+	$(COMPOSE) exec $(SERVICE) sh
 
 lint:
-	yarn lint
+	cd $(API_DIR) && yarn lint
 
 test:
-	yarn test
+	cd $(API_DIR) && yarn test
 
 test-watch:
-	yarn test:watch
+	cd $(API_DIR) && yarn test:watch
 
-restart:
-	$(COMPOSE) restart api
+clean:
+	rm -rf $(API_DIR)/dist $(API_DIR)/node_modules
+	yarn cache clean

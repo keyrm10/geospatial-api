@@ -1,42 +1,42 @@
-# NestJS specific
-/dist
-/node_modules
-/build
-/tmp
-.temp
-.tmp
+# NestJS build/deps
+**/dist
+**/build
+**/node_modules
+**/tmp
+**/.temp
+**/.tmp
 
 # Logs
-logs
-*.log
+**/logs
+**/*.log
 npm-debug.log*
 pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 
-# dotenv environment variable files
-.env
-.env.*
-!.env.example
+# Environment variables
+**/.env
+**/.env.*
+!**/.env.example
 
 # OS
 .DS_Store
 
 # Tests
-/coverage
-/.nyc_output
+**/coverage
+**/.nyc_output
 
-# IDEs and editors
-/.idea
-.project
-.classpath
-.c9/
-*.launch
-.settings/
-*.sublime-workspace
+# IDE
+**/.idea
+**/.project
+**/.classpath
+**/.c9/
+**/*.launch
+**/.settings/
+**/*.sublime-workspace
 
-# IDE - VSCode
+# Visual Studio Code
 .vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json
