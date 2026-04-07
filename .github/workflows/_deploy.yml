@@ -1,4 +1,4 @@
-name: CD
+name: Deploy service
 
 on:
   workflow_call:
@@ -6,27 +6,12 @@ on:
       environment:
         required: true
         type: string
-      digest:
-        required: true
-        type: string
       service:
         required: true
         type: string
-
-  workflow_dispatch:
-    inputs:
-      environment:
-        required: true
-        type: choice
-        options: [dev, stg, prod]
       digest:
         required: true
         type: string
-      service:
-        required: true
-        type: choice
-        options: [api, cache]
-        default: api
 
 concurrency:
   group: cd-${{ inputs.environment }}-${{ inputs.service }}

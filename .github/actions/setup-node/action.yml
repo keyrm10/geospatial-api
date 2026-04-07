@@ -14,7 +14,7 @@ runs:
       with:
         node-version: ${{ inputs.node-version }}
         cache: yarn
-        cache-dependency-path: yarn.lock
+        cache-dependency-path: ${{ github.workflow }}/yarn.lock
 
     - name: Install dependencies
       if: inputs.install-deps == 'true'

@@ -4,10 +4,8 @@ on:
   pull_request:
     branches: [main]
     paths: &paths
-      - 'src/**'
-      - 'package.json'
-      - 'yarn.lock'
-      - 'Dockerfile'
+      - 'services/api/**'
+      - 'services/cache/**'
       - '.github/**'
   push:
     branches: [main]
@@ -22,13 +20,34 @@ concurrency:
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      cache: ${{ steps.filter.outputs.cache }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            api:
+              - 'services/api/src/**'
+              - 'services/api/package.json'
+              - 'services/api/yarn.lock'
+              - 'services/api/Dockerfile'
+            cache:
+              - 'services/cache/**'
+
   validate:
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-
-    permissions:
-      contents: read
-
+    defaults:
+      run:
+        working-directory: services/api
     steps:
       - uses: actions/checkout@v6
 
@@ -39,83 +58,76 @@ jobs:
       - run: yarn lint
       - run: yarn test
 
-  build:
-    if: github.event_name == 'push'
-    runs-on: ubuntu-24.04
-    needs: validate
-    timeout-minutes: 30
+  build-api:
+    needs: [changes, validate]
+    if: github.event_name == 'push' && needs.changes.outputs.api == 'true'
+    uses: ./.github/workflows/_build.yml
+    with:
+      service: api
+      context: services/api
+      image-name: api
+    secrets: inherit
 
-    permissions:
-      contents: read
-      id-token: write
-      security-events: write
+  build-cache:
+    needs: changes
+    if: github.event_name == 'push' && needs.changes.outputs.cache == 'true'
+    uses: ./.github/workflows/_build.yml
+    with:
+      service: cache
+      context: services/cache
+      image-name: cache
+    secrets: inherit
 
-    env:
-      IMAGE_URI: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPOSITORY }}/geospatial-api
-
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/setup-gcloud
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
-          service_account: ${{ secrets.GCP_WIF_SA }}
-
-      - name: Configure Docker auth
-        run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
-
-      - uses: docker/setup-buildx-action@v4
-
-      - name: Build and push image
-        id: build
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          push: true
-          tags: ${{ env.IMAGE_URI }}:${{ github.sha }}
-          provenance: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Scan image for vulnerabilities
-        uses: aquasecurity/trivy-action@v0.35.0
-        with:
-          image-ref: ${{ env.IMAGE_URI }}@${{ steps.build.outputs.digest }}
-          format: sarif
-          output: trivy.sarif
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: 1
-
-      - name: Upload scan results
-        if: always()
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: trivy.sarif
-
-  deploy-dev:
-    needs: build
-    uses: ./.github/workflows/cd.yml
+  deploy-dev-api:
+    needs: build-api
+    uses: ./.github/workflows/_deploy.yml
     with:
       environment: dev
-      digest: ${{ needs.build.outputs.digest }}
+      service: api
+      digest: ${{ needs.build-api.outputs.digest }}
     secrets: inherit
 
-  deploy-stg:
-    needs: [build, deploy-dev]
-    uses: ./.github/workflows/cd.yml
+  deploy-stg-api:
+    needs: [build-api, deploy-dev-api]
+    uses: ./.github/workflows/_deploy.yml
     with:
       environment: stg
-      digest: ${{ needs.build.outputs.digest }}
+      service: api
+      digest: ${{ needs.build-api.outputs.digest }}
     secrets: inherit
 
-  deploy-prod:
-    needs: [build, deploy-stg]
-    uses: ./.github/workflows/cd.yml
+  deploy-prod-api:
+    needs: [build-api, deploy-stg-api]
+    uses: ./.github/workflows/_deploy.yml
     with:
       environment: prod
-      digest: ${{ needs.build.outputs.digest }}
+      service: api
+      digest: ${{ needs.build-api.outputs.digest }}
+    secrets: inherit
+
+  deploy-dev-cache:
+    needs: build-cache
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      environment: dev
+      service: cache
+      digest: ${{ needs.build-cache.outputs.digest }}
+    secrets: inherit
+
+  deploy-stg-cache:
+    needs: [build-cache, deploy-dev-cache]
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      environment: stg
+      service: cache
+      digest: ${{ needs.build-cache.outputs.digest }}
+    secrets: inherit
+
+  deploy-prod-cache:
+    needs: [build-cache, deploy-stg-cache]
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      environment: prod
+      service: cache
+      digest: ${{ needs.build-cache.outputs.digest }}
     secrets: inherit
