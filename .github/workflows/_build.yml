@@ -48,7 +48,8 @@ jobs:
         with:
           context: ${{ inputs.context }}
           push: true
-          tags: ${{ env.IMAGE_URI }}:${{ github.sha }}
+          tags: |
+            ${{ env.IMAGE_URI }}:${{ github.sha }}
           provenance: false
           cache-from: type=gha,scope=${{ inputs.service }}
           cache-to: type=gha,mode=max,scope=${{ inputs.service }}

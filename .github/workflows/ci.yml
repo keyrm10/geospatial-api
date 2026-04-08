@@ -84,7 +84,7 @@ jobs:
     with:
       environment: dev
       service: api
-      digest: ${{ needs.build-api.outputs.digest }}
+      digest: ${{ needs['build-api'].outputs['digest'] }}
     secrets: inherit
 
   deploy-stg-api:
@@ -93,7 +93,7 @@ jobs:
     with:
       environment: stg
       service: api
-      digest: ${{ needs.build-api.outputs.digest }}
+      digest: ${{ needs['build-api'].outputs['digest'] }}
     secrets: inherit
 
   deploy-prod-api:
@@ -102,7 +102,7 @@ jobs:
     with:
       environment: prod
       service: api
-      digest: ${{ needs.build-api.outputs.digest }}
+      digest: ${{ needs['build-api'].outputs['digest'] }}
     secrets: inherit
 
   deploy-dev-cache:
@@ -111,7 +111,7 @@ jobs:
     with:
       environment: dev
       service: cache
-      digest: ${{ needs.build-cache.outputs.digest }}
+      digest: ${{ needs['build-cache'].outputs['digest'] }}
     secrets: inherit
 
   deploy-stg-cache:
@@ -120,7 +120,7 @@ jobs:
     with:
       environment: stg
       service: cache
-      digest: ${{ needs.build-cache.outputs.digest }}
+      digest: ${{ needs['build-cache'].outputs['digest'] }}
     secrets: inherit
 
   deploy-prod-cache:
@@ -129,5 +129,5 @@ jobs:
     with:
       environment: prod
       service: cache
-      digest: ${{ needs.build-cache.outputs.digest }}
+      digest: ${{ needs['build-cache'].outputs['digest'] }}
     secrets: inherit

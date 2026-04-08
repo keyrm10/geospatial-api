@@ -1,0 +1,12 @@
+{
+  "name": "carto-geospatial-api",
+  "version": "0.0.0",
+  "private": true,
+  "devDependencies": {
+    "@semantic-release/changelog": "^6.0.0",
+    "@semantic-release/commit-analyzer": "^10.0.0",
+    "@semantic-release/github": "^10.0.0",
+    "@semantic-release/release-notes-generator": "^10.0.0",
+    "semantic-release": "^21.0.0"
+  }
+}
