@@ -35,3 +35,6 @@ test-watch:
 clean:
 	rm -rf $(API_DIR)/dist $(API_DIR)/node_modules
 	yarn cache clean
+
+replicate:
+	bash scripts/replicate-osm-buildings.sh
