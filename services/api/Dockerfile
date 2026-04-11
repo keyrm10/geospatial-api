@@ -10,7 +10,7 @@ RUN corepack enable
 # Install all dependencies for build
 FROM base AS deps
 COPY package.json yarn.lock ./
-RUN yarn install --immutable
+RUN yarn install --frozen-lockfile
 
 # Build app
 FROM deps AS build
@@ -21,7 +21,7 @@ RUN yarn build
 # Production dependencies only
 FROM base AS prod-deps
 COPY package.json yarn.lock ./
-RUN yarn install --immutable --production
+RUN yarn install --frozen-lockfile --production
 
 # Runtime
 FROM gcr.io/distroless/nodejs22-debian13:nonroot AS runtime
