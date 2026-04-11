@@ -1,23 +1,23 @@
 services:
   api:
-    container_name: api
     build:
       context: ./services/api
-    ports:
-      - '3000:3000'
-    env_file: ./services/api/.env
-    environment:
-      NODE_ENV: development
+    env_file:
+      - ./services/api/.env
     restart: unless-stopped
+    volumes:
+      - ./services/api/src:/usr/src/app/src
+      - /usr/src/app/node_modules
+    ports:
+      - "3000:3000"
 
   cache:
-    container_name: cache
     build:
       context: ./services/cache
-    ports:
-      - "8080:80"
-    environment:
-      UPSTREAM_URL: http://api:3000
     depends_on:
       - api
+    environment:
+      UPSTREAM_URL: http://api:3000
     restart: unless-stopped
+    ports:
+      - "8080:80"
