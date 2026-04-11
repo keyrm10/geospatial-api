@@ -9,6 +9,11 @@ DEST_TABLE="${BQ_DEST_TABLE:-osm_buildings}"
 DEST="${DEST_PROJECT}:${DEST_DATASET}.${DEST_TABLE}"
 LOCATION="${BQ_LOCATION:-EU}"
 
+if ! command -v bq &> /dev/null; then
+  echo "Missing bq command. Install Google Cloud CLI: https://cloud.google.com/sdk/docs/install"
+  exit 1
+fi
+
 echo "[$(date -u +%FT%TZ)] Starting replication: ${SOURCE} -> ${DEST}"
 
 # Ensure destination dataset exists
