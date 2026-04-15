@@ -4,4 +4,8 @@ resource "google_artifact_registry_repository" "this" {
   repository_id = var.repository_id
   format        = "DOCKER"
   description   = "Container image repository for the geospatial-api services"
+
+  lifecycle {
+    prevent_destroy = var.environment != "dev"
+  }
 }

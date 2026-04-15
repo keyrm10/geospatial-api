@@ -8,7 +8,10 @@ terraform {
     }
   }
 
-  # backend "gcs" {}
+  backend "gcs" {
+    bucket = var.state_bucket
+    prefix = "env/${var.environment}"
+  }
 }
 
 provider "google" {

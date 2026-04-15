@@ -10,6 +10,8 @@ resource "google_cloud_run_v2_service" "this" {
   project  = var.project_id
   location = var.location
 
+  ingress = var.allow_unauthenticated ? "INGRESS_TRAFFIC_ALL" : "INGRESS_TRAFFIC_INTERNAL_ONLY"
+
   scaling {
     min_instance_count = var.min_instances
     max_instance_count = var.max_instances

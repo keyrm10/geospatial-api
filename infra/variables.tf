@@ -11,11 +11,11 @@ variable "region" {
 
 variable "environment" {
   type        = string
-  description = "Environment (dev, stg, prod)"
+  description = "Environment (dev, stg, prd)"
 
   validation {
-    condition     = contains(["dev", "stg", "prod"], var.environment)
-    error_message = "Environment must be one of: dev, stg, prod."
+    condition     = contains(["dev", "stg", "prd"], var.environment)
+    error_message = "Environment must be one of: dev, stg, prd."
   }
 }
 
@@ -25,26 +25,21 @@ variable "repository_id" {
   default     = "geospatial-api"
 }
 
-variable "api_image" {
+variable "state_bucket" {
   type        = string
-  description = "API container image URI"
+  description = "GCS bucket for OpenTofu remote state"
 }
 
-variable "cache_image" {
+variable "api_image_ref" {
   type        = string
-  description = "Cache container image URI"
+  description = "API container image reference (tag or digest)"
+  default     = "us-docker.pkg.dev/cloudrun/container/placeholder"
 }
 
-variable "api_image_digest" {
+variable "cache_image_ref" {
   type        = string
-  description = "API image digest (optional)"
-  default     = ""
-}
-
-variable "cache_image_digest" {
-  type        = string
-  description = "Cache image digest (optional)"
-  default     = ""
+  description = "Cache container image reference (tag or digest)"
+  default     = "us-docker.pkg.dev/cloudrun/container/placeholder"
 }
 
 variable "api_container_port" {
@@ -72,27 +67,43 @@ variable "cache_env_vars" {
 }
 
 variable "api_min_instances" {
-  type        = number
-  description = "API minimum instances"
-  default     = 5
+  type        = map(number)
+  description = "API minimum instances per environment"
+  default = {
+    dev  = 0
+    stg  = 5
+    prod = 5
+  }
 }
 
 variable "api_max_instances" {
-  type        = number
-  description = "API maximum instances"
-  default     = 5
+  type        = map(number)
+  description = "API maximum instances per environment"
+  default = {
+    dev  = 5
+    stg  = 5
+    prod = 5
+  }
 }
 
 variable "cache_min_instances" {
-  type        = number
-  description = "Cache minimum instances"
-  default     = 1
+  type        = map(number)
+  description = "Cache minimum instances per environment"
+  default = {
+    dev  = 0
+    stg  = 1
+    prod = 1
+  }
 }
 
 variable "cache_max_instances" {
-  type        = number
-  description = "Cache maximum instances"
-  default     = 1
+  type        = map(number)
+  description = "Cache maximum instances per environment"
+  default = {
+    dev  = 1
+    stg  = 1
+    prod = 1
+  }
 }
 
 variable "api_health_check_path" {

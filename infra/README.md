@@ -20,8 +20,8 @@ Initialise with environment-specific tfvars:
 
 ```sh
 tofu init
-tofu plan -var-file=environments/dev.tfvars
-tofu apply -var-file=environments/dev.tfvars
+tofu plan -var-file=envs/dev.tfvars
+tofu apply -var-file=envs/dev.tfvars
 ```
 
 ## Inputs
