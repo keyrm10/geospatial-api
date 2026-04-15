@@ -2,87 +2,104 @@
 
 ## Overview
 
-This solution introduces a containerised local development environment that is consistent across Linux and macOS. The goal is to eliminate OS-specific differences, stabilise dependency resolution, and provide a reproducible setup that any developer can run with minimal prerequisites.
+A containerised local environment that is consistent across Linux and macOS. It uses a multi-stage Dockerfile, Docker Compose, and a Makefile to provide a reproducible setup with minimal prerequisites.
 
-It includes a multi-stage `Dockerfile`, a `Docker Compose` service definition, and a `Makefile` to simplify common workflows. The optional step is covered by a replication script (`scripts/replicate-osm-buildings.sh`) invocable via `make replicate`.
+The optional step is covered by a [replication script](scripts/replicate-osm-buildings.sh) invocable via `make replicate`.
 
-### `Dockerfile`
+## Components
 
-The image is built in four named stages to keep the final artifact lean and secure:
+### [Dockerfile](services/api/Dockerfile)
+
+Four build stages produce a minimal, secure runtime image:
 
 | Stage | Base | Purpose |
 | :--- | :--- | :--- |
-| `base` | `node:22-trixie-slim` | Shared foundation; enables Corepack (Yarn) |
-| `deps` | `base` | Installs all dependencies (dev and prod) against a lockfile |
+| `base` | `node:22-trixie-slim` | Enables Corepack (Yarn) |
+| `deps` | `base` | Installs dependencies from lockfile |
 | `build` | `deps` | Compiles TypeScript to `dist/` |
 | `prod-deps` | `base` | Re-installs production-only dependencies |
-| `runtime` | `distroless/nodejs22-debian13:nonroot` | Final image; no shell or package manager, runs as non-root |
+| `runtime` | `distroless/nodejs22-debian13:nonroot` | Final image; non-root, no shell |
 
-The `runtime` stage copies only `node_modules` (prod) and `dist/` from their respective stages, so no source code, dev tooling, or build cache reaches the final image. Using a distroless base further reduces the attack surface and image size.
+Only `node_modules` (prod) and `dist/` are copied to the runtime stage. `NODE_VERSION` is parameterised via `ARG` for build-time overrides.
 
-`NODE_VERSION` is parameterised via `ARG` so it can be overridden at build time without editing the file.
+### [compose.yaml](compose.yaml)
 
-### `compose.yaml`
-
-A single `api` service that:
+Single `api` service configuration:
 
 - Builds from `services/api/` using the Dockerfile above.
 - Exposes port `3000` on the host.
-- Loads secrets and service config from `services/api/.env` (not committed to version control).
+- Loads environment variables (`GOOGLE_APPLICATION_CREDENTIALS`, `MAX_JSON_RESPONSE_SIZE`) from a `.env` file (not committed to version control).
 - Injects `NODE_ENV=development` at the compose level, keeping it separate from `.env` so environment-specific values are not accidentally promoted to production.
+- Mounts a volume for synchrozing local `src` with the container and persists `node_modules` to avoid reinstalling modules on every container restart.
 - Uses `restart: unless-stopped` to survive daemon restarts during a workday without requiring manual intervention.
 
-### `Makefile`
+> Mount the service account JSON file as a volume or set `GOOGLE_APPLICATION_CREDENTIALS` to a local path.
 
-A thin convenience layer; all targets delegate to either `docker compose` or the local `yarn` scripts. No logic lives here.
+### [Makefile](Makefile)
+
+Thin wrapper around `docker compose` and `yarn`:
 
 ```makefile
-make build        # Build the image
-make up           # Build and start the service in detached mode
-make down         # Stop and remove containers and volumes
+make build        # Build image
+make up           # Start service (detached)
+make down         # Stop and remove containers/volumes
 make logs         # Stream logs
-make restart      # Restart the api container
-make shell        # Open a shell inside the container
-make lint         # Run the linter locally
-make test         # Run unit tests locally
-make test-watch   # Run tests in watch mode
-make clean        # Remove dist/, node_modules/, and Yarn cache
-make replicate    # Run the BQ table replication script
+make restart      # Restart container
+make shell        # Open shell in container
+make lint         # Run linter (host)
+make test         # Run tests (host)
+make test-watch   # Run tests in watch mode (host)
+make clean        # Remove dist/, node_modules/, cache
+make replicate    # Run BigQuery replication script
 ```
 
-`lint`, `test`, and `test-watch` intentionally run on the host (via the local Yarn install) rather than inside the container to keep the feedback loop fast during development. They can be moved into the container if a fully hermetic environment is preferred.
+Lint and test targets run on the host for faster feedback. Move them into the container if a fully hermetic environment is required.
 
 ## Usage
 
 ### Prerequisites
 
-- `docker`
-- Docker Compose plugin
-- GNU `make`
+- Docker with Compose plugin
+- GNU Make
+
+### First run
 
 ```bash
-# First run
-cp services/api/.env.example services/api/.env  # populate credentials
+cp services/api/.env.example services/api/.env
+# Edit .env with your credentials
 make up
+```
 
-# Daily workflow
-make logs       # tail logs
-make shell      # inspect or debug the running container
-make restart    # apply a .env change without a full rebuild
-make down       # tear everything down at end of day
+### Test
+
+```bash
+curl http://localhost:3000/
+curl "http://localhost:3000/maps/table/carto-demo-data.demo_tables.retail_stores?geomField=geom&format=geojson"
+```
+
+### Daily workflow
+
+```bash
+make logs       # Tail logs
+make shell      # Debug running container
+make restart    # Apply .env changes
+make down       # Tear down at end of day
 ```
 
 ## BigQuery table replication
 
-This [script](scripts/replicate-osm-buildings.sh) leverages the `bq` CLI to create a stable copy of `carto-demo-data.demo_tilesets.osm_buildings` in a target dataset. It requires either Application Default Credentials or an active `gcloud` login in the environment.
+The [script](scripts/replicate-osm-buildings.sh) copies `carto-demo-data.demo_tilesets.osm_buildings` to a target dataset using the `bq` CLI. It requires Application Default Credentials or an active `gcloud` login.
 
-The `bq mk --dataset ... || true` check ensures the destination dataset exists, making the script idempotent and safe to run multiple times. Next, the table is copied, overwriting the destination to keep it fully synchronised with the source. The `bq cp --force` flag ensures atomic overwrites, so readers always see a complete, consistent snapshot (never a partial state). The `--no_async` option blocks until the copy job completes, enabling safe chaining or retries in workflows.
+**Key features**:
+- Idempotent: creates destination dataset if missing (`bq mk --dataset ... || true`)
+- Atomic: `bq cp --force` overwrites the destination safely, so readers always see a complete, consistent snapshot (never a partial state)
+- Synchronous: `--no_async` blocks until completion for reliable chaining
 
-Re-running the script will overwrite the existing copy, making it suitable for recurring refresh workflows.
+> Re-running the script will overwrite the existing copy, making it suitable for recurring refresh workflows.
 
-### Scheduling with cron
+### Scheduling
 
-The script can be scheduled for recurring execution using cron. For example, to run nightly at 02:00 UTC:
+The script can be scheduled for recurring execution via cron. For example, to run nightly at 02:00 UTC:
 
 ```bash
 0 2 * * * BQ_DEST_PROJECT=<PROJECT_ID> /path/to/replicate-osm-buildings.sh >> /var/log/bq-replica.log 2>&1
@@ -94,73 +111,70 @@ For fully managed execution, a GCP-native alternative is using Cloud Scheduler w
 
 ## Overview
 
-This module implements a robust, automated CI/CD pipeline using GitHub Actions. It ensures code quality, security compliance, and reliable deployment across three distinct environments (`dev`, `stg`, `prod`) on Google Cloud. Infrastructure is managed as code with OpenTofu.
+Automated CI/CD via GitHub Actions. Ensures code quality, security scanning, and sequential promotion across `dev`, `stg`, `prd` on Google Cloud. Infrastructure is managed with OpenTofu.
 
-The pipeline is designed around a modular, reusable workflow structure to minimise duplication and maximise maintainability. It is also path-filtered and change-aware: only the services that actually changed are built and promoted, keeping run times and costs proportional to the work done.
+Path filtering ensures only changed services (`api`, `cache`) or infrastructure trigger relevant workflows.
 
 ## Technologies
 
 | Concern | Tool |
 | :--- | :--- |
-| CI/CD orchestration | GitHub Actions |
-| Container registry | Google Artifact Registry |
+| Orchestration | GitHub Actions |
+| Registry | Google Artifact Registry |
 | Runtime | Google Cloud Run |
-| Infrastructure as Code | OpenTofu (open-source Terraform fork) |
-| Google Cloud auth | Workload Identity Federation (keyless) |
-| Vulnerability scanning | Trivy -> GitHub Security tab (SARIF) |
-| Versioning | semantic-release (Conventional Commits) |
+| IaC | OpenTofu |
+| Auth | Workload Identity Federation |
+| Scanning | Trivy (CRITICAL/HIGH) |
+| Versioning | semantic-release (`api` only) |
 
 ## Workflow structure
-
-The pipeline is decomposed into several specialised workflows:
 
 ```text
 .github/
 ├── actions/
-│   ├── setup-gcloud/     # Composite: WIF auth + gcloud SDK
-│   └── setup-node/       # Composite: Node + Yarn cache
+│   └── build-push/         # Composite: auth, build, push, Trivy scan
 └── workflows/
-    ├── ci.yml            # Main entry point (PR + push to main)
-    ├── _build.yml        # Reusable: build, push, scan image
-    ├── _deploy.yml       # Reusable: deploy to a single environment
-    ├── cd.yml            # Manual / event-driven deploy escape hatch
-    ├── release.yml       # Semantic versioning on main
-    └── infra.yml         # OpenTofu plan (PR) + apply (main)
+    ├── ci-api.yml          # API: lint, test, build, release, deploy (dev→stg→prd)
+    ├── ci-cache.yml        # Cache: nginx validate, build, deploy (dev→stg→prd)
+    └── infra.yml           # OpenTofu: fmt/validate (PR), plan (PR comment), apply (main)
 ```
 
 ## CI/CD flow
 
-### 1. Development and validation
+### Validate (PR or push)
+- **Trigger**: PR opened or push to `main`; workflow executes only if changed paths match `services/api/**`, `services/cache/**`, or `infra/**`.
+- **Actions**:
+  - `api`: runs `yarn lint` and `yarn test` within `services/api`.
+  - `cache`: validates nginx configuration via `docker run nginx -t`.
+  - `infra`: executes `tofu fmt -check -recursive`, `tofu init -backend=false`, and `tofu validate`.
 
-- **Trigger**: A developer opens a Pull Request (PR) against `main`.
-- **Path Filtering**: The pipeline identifies which services (`api`, `cache`) have been modified using `dorny/paths-filter`.
-- **Validation**: For affected services, the pipeline executes:
-  - Linting (`yarn lint`)
-  - Unit tests (`yarn test`)
-  - Infrastructure plan (`tofu plan`) for any IaC changes.
-- **Security**: If code is pushed to `main`, the container image is built and scanned for critical/high vulnerabilities using Trivy.
+### Build (push to `main` only)
+- **Trigger**: Merge to `main` for `api` or `cache`.
+- **Actions** (`build-push` composite):
+  1. Authenticates to Google Cloud via Workload Identity Federation.
+  2. Builds image with Docker Buildx, leveraging GitHub Actions Cache for layer reuse.
+  3. Pushes immutable image to Artifact Registry, tagged with `github.sha`.
+  4. Scans with Trivy (`CRITICAL,HIGH`, `ignore-unfixed: true`); fails job on detection.
+  5. Uploads SARIF results to GitHub Security tab; outputs digest for deployment.
 
-### 2. Build and publish
+### Release (`api` only)
+- **Trigger**: Push to `main` for `api`.
+- **Action**: Executes `semantic-release` to automate versioning, Git tagging, and changelog generation from Conventional Commits.
 
-- **Trigger**: Merge to `main`.
-- **Action**: The `_build.yml` workflow is invoked.
-- **Process**:
-  1. Authenticates with Google Cloud using Workload Identity Federation (WIF).
-  2. Builds the Docker image with layered caching via GitHub Actions Cache.
-  3. Pushes the immutable image to Artifact Registry, tagged with the commit SHA.
-  4. Outputs the image digest for downstream deployment.
+### Deploy (push to `main`, sequential promotion)
+- **Pattern**: `dev` → `stg` → `prd`; each stage depends on successful completion of the prior.
+- **Gates**: GitHub Environments enforce approval policies for `stg` and `prd`; each uses a dedicated, least-privilege service account.
+- **Action** (`deploy-cloudrun` composite): Deploys image by digest to Cloud Run service `${service}-${environment}`.
 
-### 3. Deployment strategy
+### Infrastructure (PR or push)
+- **PR**: Posts `tofu plan` output as a comment for each environment (`dev`, `stg`, `prd`).
+- **Merge to `main`**: Applies plans sequentially (`max-parallel: 1`) using uploaded plan artifacts to guarantee plan/apply consistency.
 
-The deployment follows a progressive, environment-based promotion strategy: `dev` is automatically deployed immediately after a successful build, `stg` only deploys after `dev` succeeds, and `prod` only after `stg`. Each environment is also a [GitHub Environment](https://docs.github.com/en/actions/deployment/targeting-different-environments), enabling per-environment secrets, protection rules, and an optional manual approval gate before `prod`. This sequential dependency (`needs: [build, deploy-stg]`) ensures that untested code never reaches production.
+## Concurrency control
 
-- **Concurrency control**:
-  Each environment has a dedicated concurrency group. This prevents overlapping deployments to the same environment, ensuring state consistency. `cancel-in-progress: false` ensures a queued deploy waits rather than being dropped.
+Workflows use `concurrency` groups (`${{ github.workflow }}-${{ github.ref }}`) to isolate execution per branch. Enabling `cancel-in-progress` terminates outdated jobs when new commits arrive on an active pull request. This prevents race conditions and ensures status checks reflect the latest commit.
 
-- **Manual / hotfix deploys**:
-  `cd.yml` exposes a `workflow_dispatch` trigger that accepts an environment, digest, and service as inputs. This allows deploying a specific image digest to any environment without going through the full pipeline - useful for rollbacks or emergency hotfixes.
-
-## Authentication (Workload Identity Federation)
+## Authentication
 
 Instead of storing long-lived Google Cloud service account keys, the pipeline authenticates via Workload Identity Federation.
 
@@ -170,22 +184,22 @@ GitHub's OIDC token is exchanged for a short-lived Google Cloud access token sco
 
 ## Overview
 
-The infrastructure required to deploy the API and its caching layer is provisioned on Google Cloud using OpenTofu (Terraform-compatible). Each environment (`dev`, `stg`, `prod`) is an isolated Google Cloud project with its own service accounts, Artifact Registry repository, and Cloud Run services. The IaC is structured as a root module with three reusable child modules, driven by per-environment `.tfvars` files.
+Infrastructure is provisioned on Google Cloud using OpenTofu. A single project hosts three isolated environments (`dev`, `stg`, `prd`), differentiated by the `environment` variable. Each environment has dedicated service accounts, a shared Artifact Registry repository, and environment-specific Cloud Run services (`api-${environment}`, `cache-${environment}`). Configuration is driven by per-environment `.tfvars` files in `infra/envs/`.
 
-| OpenTofu was chosen over Terraform because it remains fully open source, whereas Terraform switched to the BSL license. OpenTofu offers identical functionality and compatibility with Terraform, while maintaining vendor neutrality and an open-source license.
+> OpenTofu is used instead of Terraform to maintain a fully open-source toolchain under the MPL license.
 
 ## Architecture
 
-The deployment consists of two services, each running as a managed Cloud Run instance:
+Two Cloud Run services form the deployment:
 
-1. **API service**: The core NestJS application serving BigQuery geospatial data.
-2. **Cache service**: A dedicated caching layer positioned in front of the API to reduce latency and load on the backend.
+1. **API service** (`api-${environment}`): NestJS application serving BigQuery geospatial data.
+2. **Cache service** (`cache-${environment}`): Nginx reverse proxy with HTTP response caching, positioned in front of the API.
 
 ```mermaid
 flowchart LR
     Client[Client]
-    Proxy["cache-service<br/>(1 instance)"]
-    API["api-service<br/>(5 instances)"]
+    Proxy["cache-${environment}<br/>(1 instance)"]
+    API["api-${environment}<br/>(5 instances)"]
     BQ["BigQuery<br/>(read-only)"]
     Cache["ephemeral cache<br/>tiles: 1h TTL<br/>tables: 15m TTL"]
     Client --> Proxy
@@ -195,11 +209,9 @@ flowchart LR
     Proxy -.->|cache hit| Client
 ```
 
-All traffic enters through the cache service. On a cache miss the cache proxies to the API; the API queries BigQuery and returns the result, which the cache stores for subsequent requests.
+All public traffic enters via the cache service. Cache misses proxy to the API; responses are cached per `Cache-Control` headers. Each service runs under a dedicated, least-privilege runtime service account.
 
-Each service runs under a dedicated service account with the minimum required IAM roles (log writer, metric writer, Artifact Registry reader).
-
-### API caching
+### Caching
 
 The cache container uses Nginx as a reverse proxy with response caching (`proxy_cache`).
 
@@ -221,80 +233,119 @@ Responses include a `Cache-Control: max-age` header, with values like `3600` sec
 
 ```text
 infra/
-├── main.tf               # Root: wires modules together
-├── variables.tf
-├── outputs.tf
-├── providers.tf
-├── environments/
+├── main.tf               # Root: enables APIs, wires modules, defines GHA SAs
+├── variables.tf          # Input variables, including image refs with defaults
+├── outputs.tf            # Service URLs and GHA service account emails
+├── providers.tf          # OpenTofu + Google provider, GCS backend
+├── envs/
 │   ├── dev.tfvars
 │   ├── stg.tfvars
-│   └── prod.tfvars
+│   └── prd.tfvars
 └── modules/
-    ├── cloud_run_service/ # Generic Cloud Run service definition
-    ├── artifact_registry/ # Docker repository
-    └── iam/               # Service account + role bindings
+    ├── cloud_run_service/ # Cloud Run v2 service, scaling, probes, IAM
+    ├── artifact_registry/ # Docker repository with lifecycle protection
+    └── iam/               # Service account + project/repository IAM bindings
 ```
 
-The codebase is structured into reusable modules to enforce separation of concerns:
+### Key modules
 
-- **`modules/cloud_run_service`**: Provisions the Cloud Run v2 service, configuring scaling, health checks, environment variables, and IAM permissions. It uses startup probes to ensure traffic is only routed to ready instances.
-- **`modules/iam`**: Manages Service Accounts with least-privilege access. Each service gets a dedicated account with permissions limited to logging, monitoring, and reading from Artifact Registry.
-- **`modules/artifact_registry`**: Creates the private container registry repository for storing service images.
-- **`main.tf`**: Orchestrates the modules, enabling required GCP APIs and wiring dependencies between services (for example, passing the API URL to the Cache).
+- **`cloud_run_service`**: Provisions `google_cloud_run_v2_service` with startup probes, environment variables, scaling bounds, and conditional public access (`allUsers` invoker role).
+- **`iam`**: Creates runtime service accounts with `roles/logging.logWriter`, `roles/monitoring.metricWriter`, and Artifact Registry reader access.
+- **`artifact_registry`**: Creates a `DOCKER` format repository; `prevent_destroy = var.environment != "dev"` protects staging and production data.
+
+### Image reference handling
+
+Variables `api_image_ref` and `cache_image_ref` accept a full image reference (tag or digest). Defaults point to a public placeholder (`us-docker.pkg.dev/cloudrun/container/hello`) to enable initial `tofu apply` before any images are built. CI/CD pipelines override these with digest-pinned references (`image@sha256:...`) for immutable deployments.
+
+## Separation of concerns
+
+| Concern | Managed by | Trigger | Method |
+| :--- | :--- | :--- | :--- |
+| Static resources | OpenTofu | IaC change (PR to `main`) | `tofu apply` via `infra.yml` |
+| Service accounts / IAM | OpenTofu | IaC change | `tofu apply` |
+| Image deployment | GitHub Actions | Code merge to `main` | `tofu apply -var="api_image_ref=..."` |
+| Scaling / env vars | OpenTofu | `tfvars` update | `tofu apply` |
+
+Infrastructure changes require PR review and explicit apply. Image promotions are automated, sequential (`dev` → `stg` → `prd`), and digest-pinned.
 
 ## Usage
 
 ### Prerequisites
 
-- `tofu` >= 1.5 (or `terraform` >= 1.5 - state format is compatible)
-- `gcloud` authenticated with permissions to manage Cloud Run, IAM, and Artifact Registry in each target project
-- A GCS bucket for remote state (set via `-backend-config`)
+- `tofu` >= 1.5
+- `gcloud` authenticated with roles: `roles/editor` (bootstrap), then least-privilege for pipelines
+- GCS bucket for remote state (created manually or via bootstrap script)
 
-### Setup
+### Bootstrap (one-time)
 
 ```bash
+# Create state bucket
+gcloud storage buckets create gs://<TF_STATE_BUCKET> --location=europe-west1
+
+# Initialise backend
 cd infra
-
 tofu init \
-  -backend-config="bucket=<YOUR_TF_STATE_BUCKET>" \
-  -backend-config="project=<GCP_PROJECT_ID>" \
-  -backend-config="prefix=infra/<ENVIRONMENT>.tfstate"
+  -backend-config="bucket=<TF_STATE_BUCKET>" \
+  -backend-config="prefix=env/dev"
 
-tofu plan -var-file=environments/<ENVIRONMENT>.tfvars
-tofu apply -var-file=environments/<ENVIRONMENT>.tfvars
+# Apply baseline with placeholder images
+tofu apply -var-file=envs/dev.tfvars \
+  -var="project_id=<PROJECT_ID>" \
+  -var="environment=dev"
 ```
 
-Replace `<ENVIRONMENT>` with `dev`, `stg`, or `prod`.
+Services deploy with the placeholder image. The first CI/CD run replaces it with the built image.
+
+### Ongoing operations
+
+- **Infrastructure changes**: Modify `.tf` files, open a PR. The `infra.yml` workflow runs `tofu plan` (commented on PR) and `tofu apply` (on merge).
+- **Image deployments**: Merge code to `main`. The `ci-api.yml` or `ci-cache.yml` workflow builds, scans, and runs `tofu apply -var="*_image_ref=..."` to promote the new revision.
+- **Environment promotion**: Manual approval gates in GitHub Environments control `stg` and `prd` deployments.
 
 ### Outputs
 
-Upon successful application, the public URLs for the services are printed:
+```bash
+tofu output -state=envs/<environment>.tfstate
+```
 
-- `api_url`: The endpoint for the geospatial API.
-- `cache_url`: The endpoint for the cached API responses.
+- `api_url`: Public URL for `api-${environment}`.
+- `cache_url`: Public URL for `cache-${environment}` (use as entry point).
+- `github_actions_service_accounts`: Emails for WIF binding (sensitive).
 
-Use `cache_url` as the public entry point. Direct API traffic through the cache in all environments.
+### Remote state
+
+State is stored in GCS with environment isolation via `prefix = "env/${var.environment}"`. Never use local state for shared or automated workflows.
 
 # Part 4 - Production Readiness
 
 When transitioning from a prototype to a production-grade system, it’s important to focus on security, resilience, and observability. The following areas are key to ensuring the system is production-ready.
 
-## Network security
+### Network security
 
-The Cloud Run services should be limited to internal-only ingress. Traffic should route through a Global External HTTP(S) Load Balancer with Cloud CDN. This setup ensures DDoS protection, handles SSL termination, and provides edge caching for static vector tiles, which helps reduce latency and offload the backend. For inter-service communication (e.g., cache to API), use a Serverless VPC Connector with private IPs to ensure data remains within the private network and doesn’t go over the public internet.
+- Restrict Cloud Run ingress to internal-only; route traffic through a Global External HTTP(S) Load Balancer with Cloud CDN for DDoS protection, SSL termination, and edge caching.
+- Use Serverless VPC Connectors with private IPs for inter-service communication to keep traffic off the public internet.
 
-## IAM
+### IAM and secrets
 
-It's essential to eliminate hardcoded environment variables for sensitive data. All secrets should be managed with secrets manager (e.g., Google Secret Manager, HashiCorp Vault) and injected at runtime or mounted as volumes. To ensure the integrity of the supply chain, enable Binary Authorization so that only images signed by the CI pipeline can be deployed. It's also important to regularly audit IAM policies to make sure each service has only the permissions it needs, following the principle of least privilege.
+- Store secrets in Secret Manager; inject at runtime or mount as volumes. Never hardcode credentials.
+- Enable Binary Authorization to allow only CI-signed images.
+- Audit IAM policies regularly; enforce least privilege.
 
-## Reliability
+### Reliability
 
-The system should be able to handle failures gracefully. Implement graceful shutdown logic to drain active requests upon receiving a `SIGTERM`, preventing 502 errors during scaling or deployments. For the cache layer, use retry logic with exponential backoff and a circuit breaker to avoid cascading failures if the API becomes unresponsive. Health checks should go beyond simple connectivity checks—ensure that dependencies are verified so only fully functional instances receive traffic.
+- Implement graceful shutdown (`SIGTERM` handling) to drain requests and avoid 502 errors during deploys.
+- Add retry logic with exponential backoff and circuit breakers in the cache layer to prevent cascading failures.
+- Use comprehensive health checks that verify dependencies, not just connectivity.
 
-## Observability
+### Observability
 
-In production, basic logging won’t cut it. Implement structured JSON logging to make parsing easier in Cloud Logging. Use OpenTelemetry for distributed tracing to track latency across the Cache-API-BigQuery pipeline. Set up SLO-based alerts for error rates and P95 latency. Additionally, export custom business metrics (like tile request volume) to Cloud Monitoring for better insight and faster incident response.
+- Use structured JSON logging for Cloud Logging.
+- Instrument with OpenTelemetry for distributed tracing across Cache-API-BigQuery.
+- Define SLOs for error rate and P95 latency; alert on breaches.
+- Export custom business metrics (e.g. tile request volume) to Cloud Monitoring.
 
-## Cost optimization
+### Cost optimisation
 
-Running direct queries to BigQuery for every request can be expensive and slow. Swap the single-instance cache for Memorystore for Redis to provide shared, high-throughput state across multiple instances. For frequently accessed spatial datasets, use BigQuery Materialized Views to reduce query costs. To minimize the impact of potential defects during deployments, implement canary deployments with Cloud Run's traffic splitting feature to test new releases with a small subset of users before rolling them out to everyone.
+- Replace single-instance cache with Memorystore for Redis to share state across instances.
+- Use BigQuery Materialized Views for frequently accessed spatial datasets.
+- Implement canary deployments via Cloud Run traffic splitting to limit blast radius during releases.
