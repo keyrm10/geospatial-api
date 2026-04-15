@@ -1,0 +1,115 @@
+name: ci-cache
+
+on:
+  pull_request:
+    branches: [main]
+    paths: &paths
+      - 'services/cache/**'
+      - '.github/workflows/ci-cache.yml'
+  push:
+    branches: [main]
+    paths: *paths
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SERVICE_NAME: cache
+  REGISTRY_PATH: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPOSITORY }}/cache
+  OPENTOFU_VERSION: 1.11.6
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate nginx config
+        run: docker run --rm -v ${{ github.workspace }}/services/cache/nginx.conf:/etc/nginx/nginx.conf nginx nginx -t
+
+  build:
+    needs: validate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      security-events: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build, push and scan
+        id: build
+        uses: ./.github/actions/build-push
+        with:
+          service: ${{ env.SERVICE_NAME }}
+          region: ${{ vars.GCP_REGION }}
+          registry_path: ${{ env.REGISTRY_PATH }}
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SA_BUILD }}
+
+  deploy-dev:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    environment: dev
+    steps:
+      - uses: actions/checkout@v6
+      - uses: opentofu/setup-opentofu@v2
+        with:
+          tofu_version: ${{ env.OPENTOFU_VERSION }}
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SA_INFRA }}
+      - run: tofu init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" -input=false
+        working-directory: infra
+      - run: tofu apply -auto-approve -var-file=envs/dev.tfvars -var="cache_image_ref=${{ env.REGISTRY_PATH }}@${{ needs.build.outputs.digest }}"
+        working-directory: infra
+
+  deploy-stg:
+    needs: [build, deploy-dev]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    environment: stg
+    steps:
+      - uses: actions/checkout@v6
+      - uses: opentofu/setup-opentofu@v2
+        with:
+          tofu_version: ${{ env.OPENTOFU_VERSION }}
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SA_INFRA }}
+      - run: tofu init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" -input=false
+        working-directory: infra
+      - run: tofu apply -auto-approve -var-file=envs/stg.tfvars -var="cache_image_ref=${{ env.REGISTRY_PATH }}@${{ needs.build.outputs.digest }}"
+        working-directory: infra
+
+  deploy-prd:
+    needs: [build, deploy-stg]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    environment: prd
+    steps:
+      - uses: actions/checkout@v6
+      - uses: opentofu/setup-opentofu@v2
+        with:
+          tofu_version: ${{ env.OPENTOFU_VERSION }}
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SA_INFRA }}
+      - run: tofu init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" -input=false
+        working-directory: infra
+      - run: tofu apply -auto-approve -var-file=envs/prd.tfvars -var="cache_image_ref=${{ env.REGISTRY_PATH }}@${{ needs.build.outputs.digest }}"
+        working-directory: infra

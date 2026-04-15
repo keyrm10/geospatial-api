@@ -1,0 +1,67 @@
+name: build-push
+description: Builds a container image, pushes to GAR, scans with Trivy
+
+inputs:
+  service:
+    description: Base service name
+    required: true
+  region:
+    description: Google Cloud region
+    required: true
+    default: europe-west1
+  registry_path:
+    description: Artifact Registry path (<region>-docker.pkg.dev/<project>/<repo>/<service>)
+    required: true
+  workload_identity_provider:
+    description: Workload Identity Federation provider
+    required: true
+  service_account:
+    description: Google Cloud service account for build and push
+    required: true
+
+outputs:
+  digest:
+    description: Image digest (sha256)
+    value: ${{ steps.push.outputs.digest }}
+
+runs:
+  using: composite
+  steps:
+    - uses: google-github-actions/auth@v3
+      with:
+        workload_identity_provider: ${{ inputs.workload_identity_provider }}
+        service_account: ${{ inputs.service_account }}
+
+    - uses: google-github-actions/setup-gcloud@v3
+
+    - name: Configure Docker for Artifact Registry
+      shell: bash
+      run: gcloud auth configure-docker ${{ inputs.region }}-docker.pkg.dev --quiet
+
+    - uses: docker/setup-buildx-action@v4
+
+    - name: Build and push
+      id: push
+      uses: docker/build-push-action@v7
+      with:
+        context: services/${{ inputs.service }}
+        push: true
+        tags: ${{ inputs.registry_path }}:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Scan image
+      uses: aquasecurity/trivy-action@v0.35.0
+      with:
+        image-ref: ${{ inputs.registry_path }}@${{ steps.push.outputs.digest }}
+        format: sarif
+        output: trivy-results.sarif
+        severity: CRITICAL,HIGH
+        ignore-unfixed: true
+        exit-code: 1
+
+    - name: Upload scan results
+      uses: github/codeql-action/upload-sarif@v4
+      if: always()
+      with:
+        sarif_file: trivy-results.sarif
